@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -16,31 +17,31 @@ import (
 
 // Define a struct to hold the request result, including a field for errors
 type RequestResult struct {
-	Address    string `json:"address,omitempty"`
+	Domain     string `json:"domain,omitempty"`
 	IP         string `json:"ip"`
+	Protocol   string `json:"protocol"`
 	StatusCode int    `json:"status_code"`
-	Error      string `json:"error,omitempty"` // Include error message if any, omit from JSON if empty
+	Error      string `json:"error,omitempty"`
 }
 
 func main() {
-	hostname := flag.String("hostname", "", "The hostname to check")
-	ipFilePath := flag.String("ipfile", "", "Path to the file containing IP addresses")
+	ip := flag.String("ip", "", "The IP address to check")
+	domainFile := flag.String("domains", "", "Path to the file containing domains")
 	threads := flag.Int("threads", 5, "Number of concurrent threads")
-	outputJSON := flag.Bool("oj", false, "Output results in JSON format")
 	requestTimeout := flag.Int("timeout", 10, "HTTP request timeout in seconds")
-	protocol := flag.String("protocol", "http", "Protocol to use for requests (http or https)")
-	match := flag.String("match", "", "Comma-separated list of status codes to include")
-	notMatch := flag.String("notmatch", "", "Comma-separated list of status codes to exclude")
-	ignoreCert := flag.Bool("ignoreCert", false, "Ignore SSL certificate verification errors")
+	match := flag.String("match", "200", "Comma-separated list of status codes to include")
+	ignoreCert := flag.Bool("ignoreCert", true, "Ignore SSL certificate verification errors")
+	format := flag.String("f", "text", "Output format (json, csv, or text)")
+	output := flag.String("o", "", "Output file path")
+	verbose := flag.Bool("v", false, "Show all requests and checks")
 	flag.Parse()
 
-	matchCodes := parseStatusCodes(*match)
-	notMatchCodes := parseStatusCodes(*notMatch)
-
-	if *hostname == "" || *ipFilePath == "" || (*protocol != "http" && *protocol != "https") {
-		fmt.Println("Hostname, IP file path, and valid protocol (http or https) are required.")
+	if *ip == "" || *domainFile == "" {
+		fmt.Println("IP address and domain file path are required.")
 		return
 	}
+
+	matchCodes := parseStatusCodes(*match)
 
 	client := &http.Client{Timeout: time.Duration(*requestTimeout) * time.Second}
 	if *ignoreCert {
@@ -54,75 +55,122 @@ func main() {
 	var results []RequestResult
 	var resultsMutex sync.Mutex
 
-	ipList, err := readIPsFromFile(*ipFilePath)
+	domains, err := readDomainsFromFile(*domainFile)
 	if err != nil {
-		fmt.Printf("Error reading IP addresses from file: %v\n", err)
+		fmt.Printf("Error reading domains from file: %v\n", err)
 		return
 	}
 
-	for _, ip := range ipList {
-		wg.Add(1)
-		go func(ip string) {
-			defer wg.Done()
-			semaphore <- struct{}{}
+	for _, domain := range domains {
+		for _, protocol := range []string{"http", "https"} {
+			wg.Add(1)
+			go func(domain, protocol string) {
+				defer wg.Done()
+				semaphore <- struct{}{}
 
-			result := RequestResult{IP: ip}
-			requestURL := fmt.Sprintf("%s://%s", *protocol, ip)
-			req, err := http.NewRequest("GET", requestURL, nil)
-			if err != nil {
-				result.Error = fmt.Sprintf("Failed to create request: %v", err)
-			} else {
-				req.Host = *hostname
-				resp, err := client.Do(req)
+				result := RequestResult{
+					Domain:   domain,
+					IP:       *ip,
+					Protocol: protocol,
+				}
+
+				requestURL := fmt.Sprintf("%s://%s", protocol, *ip)
+				req, err := http.NewRequest("GET", requestURL, nil)
 				if err != nil {
-					result.StatusCode = 0
-					result.Error = fmt.Sprintf("Request failed: %v", err)
+					result.Error = fmt.Sprintf("Failed to create request: %v", err)
 				} else {
-					defer resp.Body.Close()
-					result.StatusCode = resp.StatusCode
-					if !statusCodeMatches(result.StatusCode, matchCodes, notMatchCodes) {
+					req.Host = domain
+					if *verbose {
+						fmt.Printf("Checking %s://%s (IP: %s)\n", protocol, domain, *ip)
+					}
+
+					resp, err := client.Do(req)
+					if err != nil {
+						// Skip failed requests entirely
 						<-semaphore
 						return
 					}
+					defer resp.Body.Close()
+
+					result.StatusCode = resp.StatusCode
+					if !statusCodeMatches(result.StatusCode, matchCodes) {
+						<-semaphore
+						return
+					}
+
+					// Only append successful results
+					resultsMutex.Lock()
+					results = append(results, RequestResult{
+						Domain:     domain,
+						IP:         *ip,
+						Protocol:   protocol,
+						StatusCode: resp.StatusCode,
+					})
+					resultsMutex.Unlock()
 				}
-			}
 
-			resultsMutex.Lock()
-			results = append(results, result)
-			resultsMutex.Unlock()
-
-			<-semaphore
-		}(ip)
+				<-semaphore
+			}(domain, protocol)
+		}
 	}
 
 	wg.Wait()
 
-	if *outputJSON {
-		jsonResults, err := json.MarshalIndent(results, "", "  ")
+	// Output handling based on format
+	var outputString string
+	switch *format {
+	case "json":
+		jsonData, err := json.MarshalIndent(results, "", "  ")
 		if err != nil {
-			fmt.Printf("Failed to encode results to JSON: %v\n", err)
+			fmt.Printf("Error encoding JSON: %v\n", err)
 			return
 		}
-		fmt.Println(string(jsonResults))
-	} else {
-		for _, result := range results {
-			if result.Error != "" {
-				fmt.Printf("IP %s encountered an error: %s\n", result.IP, result.Error)
+		outputString = string(jsonData)
+	case "csv":
+		var csvLines []string
+		csvLines = append(csvLines, "domain,ip,protocol,status_code,error")
+		for _, r := range results {
+			csvLines = append(csvLines, fmt.Sprintf("%s,%s,%s,%d,%s",
+				r.Domain, r.IP, r.Protocol, r.StatusCode, r.Error))
+		}
+		outputString = strings.Join(csvLines, "\n")
+	default:
+		var lines []string
+		for _, r := range results {
+			if r.Error != "" {
+				lines = append(lines, fmt.Sprintf("%s://%s (IP: %s) - Error: %s",
+					r.Protocol, r.Domain, r.IP, r.Error))
 			} else {
-				fmt.Printf("IP %s responded with status code: %d\n", result.IP, result.StatusCode)
+				lines = append(lines, fmt.Sprintf("%s://%s (IP: %s) - Status: %d",
+					r.Protocol, r.Domain, r.IP, r.StatusCode))
 			}
 		}
+		outputString = strings.Join(lines, "\n")
 	}
+
+	if *output != "" {
+		// Create directory if it doesn't exist
+		dir := filepath.Dir(*output)
+		if dir != "" && dir != "." {
+			if err := os.MkdirAll(dir, 0755); err != nil {
+				fmt.Printf("Error creating output directory: %v\n", err)
+				return
+			}
+		}
+
+		err := os.WriteFile(*output, []byte(outputString), 0644)
+		if err != nil {
+			fmt.Printf("Error writing to output file: %v\n", err)
+			return
+		}
+	} else {
+		fmt.Println(outputString)
+	}
+
 }
 
-func statusCodeMatches(code int, match, notMatch []int) bool {
-	if len(match) > 0 && !inSlice(code, match) {
-		return false
-	}
-	if inSlice(code, notMatch) {
-		return false
-	}
-	return true
+func statusCodeMatches(code int, match []int) bool {
+	return inSlice(code, match)
 }
 
 func inSlice(val int, slice []int) bool {
@@ -148,24 +196,20 @@ func parseStatusCodes(s string) []int {
 	return codes
 }
 
-func readIPsFromFile(path string) ([]string, error) {
+func readDomainsFromFile(path string) ([]string, error) {
 	file, err := os.Open(path)
 	if err != nil {
 		return nil, err
 	}
 	defer file.Close()
 
-	var ips []string
+	var domains []string
 	scanner := bufio.NewScanner(file)
 	for scanner.Scan() {
-		ip := scanner.Text()
-		if ip != "" {
-			ips = append(ips, ip)
+		domain := strings.TrimSpace(scanner.Text())
+		if domain != "" {
+			domains = append(domains, domain)
 		}
 	}
-	if err := scanner.Err(); err != nil {
-		return nil, err
-	}
-
-	return ips, nil
+	return domains, scanner.Err()
 }
