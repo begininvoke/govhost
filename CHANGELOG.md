@@ -1,5 +1,37 @@
 # Changelog
 
+## Version 2.3 - Redirect Control & Enhanced Defaults
+
+### New Features
+
+#### Redirect Control (`-noRedirect`)
+- **Disable automatic redirect following**: See actual 301/302 responses instead of final destination
+- **Use case**: Find redirect loops, map redirect chains, discover redirect-only virtual hosts
+- **Default behavior**: Follows redirects (standard HTTP client behavior)
+
+**Example**:
+```bash
+# See redirect responses
+./govhost -ip 192.168.1.100 -domain example.com -noRedirect -match 301,302
+
+# Compare with default (follows redirects)
+./govhost -ip 192.168.1.100 -domain example.com -match 200,301,302
+```
+
+### Improvements
+
+#### Better Default Match Codes
+- **Old default**: `200` only
+- **New default**: `200,301,302` 
+- Reason: Catch more virtual host configurations including redirects
+- Can still customize with `-match` flag
+
+### Technical Details
+
+The `-noRedirect` flag sets a custom `CheckRedirect` function that returns `http.ErrUseLastResponse`, preventing the HTTP client from automatically following Location headers.
+
+---
+
 ## Version 2.2 - Real-Time Output & Parallel Execution
 
 ### New Features

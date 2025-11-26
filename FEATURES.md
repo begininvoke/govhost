@@ -1,6 +1,37 @@
-# GoVHost v2.2 - Feature Summary
+# GoVHost v2.3 - Feature Summary
 
-## Latest Updates (v2.2)
+## Latest Updates (v2.3)
+
+### 🔄 **Redirect Control** (NEW in v2.3)
+**What**: Control whether HTTP redirects (301, 302) are automatically followed
+
+**Flag**: `-noRedirect`
+
+**Why**: 
+- See actual redirect responses instead of final destinations
+- Find redirect loops and misconfigurations
+- Map redirect chains
+- Discover virtual hosts that only return redirects
+
+**Example**:
+```bash
+# Default - follows redirects
+$ ./govhost -ip 1.1.1.1 -domain cloudflare.com -match 200,301,302
+✓ FOUND: http://cloudflare.com (IP: 1.1.1.1) - Status: 200
+
+# With -noRedirect - stops at redirect
+$ ./govhost -ip 1.1.1.1 -domain cloudflare.com -noRedirect -match 200,301,302
+✓ FOUND: http://cloudflare.com (IP: 1.1.1.1) - Status: 301
+```
+
+### 📊 **Better Default Match Codes**
+- **Old default**: `200` only
+- **New default**: `200,301,302`
+- Catches more virtual host configurations automatically
+
+---
+
+## Previous Updates (v2.2)
 
 ### 🎯 Real-Time Output
 **What**: Virtual hosts are displayed immediately when discovered during scanning

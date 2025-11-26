@@ -208,11 +208,39 @@ ftp
 |              | Note: Connection timeout is fixed at 30 seconds  |         |
 | `-match`     | Comma-separated status codes to include          | "200"   |
 | `-ignoreCert`| Ignore SSL certificate verification errors       | true    |
+| `-noRedirect`| Disable automatic redirect following             | false   |
 | `-f`         | Output format (json, csv, or text)               | "text"  |
 | `-o`         | Output file path                                 | ""      |
 | `-v`         | Verbose mode (show all requests)                 | false   |
 
 **Note**: Either `-domain` or `-domains` is required, but not both.
+
+### Redirect Handling
+
+By default, GoVHost follows HTTP redirects (301, 302, etc.) to their final destination. Use `-noRedirect` to disable this behavior and see the actual redirect responses.
+
+**Use Cases**:
+- **Finding redirect loops**: Identify misconfigured redirects
+- **Mapping redirect chains**: See which hosts redirect where
+- **Discovery optimization**: Some virtual hosts only return redirects
+
+**Examples**:
+
+```bash
+# Follow redirects (default behavior)
+./govhost -ip 192.168.1.100 -domain example.com -match "200,301,302"
+# Result: Status: 200 (final destination after following redirect)
+
+# Don't follow redirects
+./govhost -ip 192.168.1.100 -domain example.com -noRedirect -match "200,301,302"
+# Result: Status: 301 (the redirect itself)
+```
+
+**Comparison**:
+| Flag | Behavior | Status Code Shown |
+|------|----------|-------------------|
+| (default) | Follows redirects | Final destination (e.g., 200) |
+| `-noRedirect` | Stops at redirect | Redirect itself (e.g., 301, 302) |
 
 ### Help System
 
@@ -246,6 +274,33 @@ The tool implements multiple timeout layers to handle unresponsive servers:
 
 4. **Idle Connection Timeout**: 30 seconds (fixed)
    - Time to keep idle connections in pool
+
+### Advanced Usage Scenarios
+
+#### Finding Redirect-Only Virtual Hosts
+Some virtual hosts only return redirects. Use `-noRedirect` to discover them:
+
+```bash
+# Find hosts that redirect
+./govhost -ip 192.168.1.0/24 -domains domains.txt -noRedirect -match 301,302,307,308
+```
+
+#### Comparing Redirect Behavior
+```bash
+# First pass: See redirects
+./govhost -ip 192.168.1.100 -domains domains.txt -noRedirect -match 301,302 -o redirects.json
+
+# Second pass: Follow redirects to see final destinations
+./govhost -ip 192.168.1.100 -domains domains.txt -match 200 -o destinations.json
+```
+
+#### Comprehensive Virtual Host Discovery
+```bash
+# Catch all response types
+./govhost -ip 192.168.1.0/24 -domains domains.txt -wordlist subs.txt \
+          -match "200,201,301,302,401,403" \
+          -threads 30 -timeout 5 -f json -o full-scan.json -v
+```
 
 ### Performance Tips
 

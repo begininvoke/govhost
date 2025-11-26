@@ -58,6 +58,9 @@ func printUsage() {
 	fmt.Println("        Example: -match 200,301,302,403,404")
 	fmt.Println("  -ignoreCert")
 	fmt.Println("        Ignore SSL certificate verification errors (default: true)")
+	fmt.Println("  -noRedirect")
+	fmt.Println("        Disable automatic redirect following (default: false)")
+	fmt.Println("        Use this to see 301/302 responses without following them")
 	fmt.Println("  -f string")
 	fmt.Println("        Output format: json, csv, or text (default: text)")
 	fmt.Println("  -o string")
@@ -81,6 +84,9 @@ func printUsage() {
 	fmt.Println("  # Advanced scan with custom settings")
 	fmt.Println("  govhost -ip 172.16.0.0/24 -domains domains.txt -wordlist subs.txt \\")
 	fmt.Println("          -threads 20 -timeout 5 -match 200,301,302 -f json -o results.json -v")
+	fmt.Println("")
+	fmt.Println("  # Disable redirects to see 301/302 responses")
+	fmt.Println("  govhost -ip 192.168.1.100 -domain example.com -noRedirect -match 301,302")
 	fmt.Println("")
 	fmt.Println("IP FORMAT OPTIONS:")
 	fmt.Println("  Single IP:    192.168.1.100")
@@ -117,6 +123,7 @@ func main() {
 	requestTimeout := flag.Int("timeout", 10, "HTTP request timeout in seconds")
 	match := flag.String("match", "200,301,302", "Comma-separated list of status codes to include")
 	ignoreCert := flag.Bool("ignoreCert", true, "Ignore SSL certificate verification errors")
+	noRedirect := flag.Bool("noRedirect", true, "Disable automatic redirect following default true")
 	format := flag.String("f", "text", "Output format (json, csv, or text)")
 	output := flag.String("o", "", "Output file path")
 	verbose := flag.Bool("v", false, "Show all requests and checks")
@@ -208,6 +215,13 @@ func main() {
 				KeepAlive: 30 * time.Second,
 			}).DialContext,
 		},
+	}
+
+	// Disable automatic redirect following if requested
+	if *noRedirect {
+		client.CheckRedirect = func(req *http.Request, via []*http.Request) error {
+			return http.ErrUseLastResponse
+		}
 	}
 
 	var wg sync.WaitGroup
