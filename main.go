@@ -52,6 +52,7 @@ func printUsage() {
 	fmt.Println("        Number of concurrent threads (default: 5)")
 	fmt.Println("  -timeout int")
 	fmt.Println("        HTTP request timeout in seconds (default: 10)")
+	fmt.Println("        Note: Connection timeout is fixed at 30 seconds")
 	fmt.Println("  -match string")
 	fmt.Println("        Comma-separated status codes to include (default: 200)")
 	fmt.Println("        Example: -match 200,301,302,403,404")
@@ -114,7 +115,7 @@ func main() {
 	wordlistFile := flag.String("wordlist", "", "Path to wordlist file for subdomain enumeration")
 	threads := flag.Int("threads", 5, "Number of concurrent threads")
 	requestTimeout := flag.Int("timeout", 10, "HTTP request timeout in seconds")
-	match := flag.String("match", "200", "Comma-separated list of status codes to include")
+	match := flag.String("match", "200,301,302", "Comma-separated list of status codes to include")
 	ignoreCert := flag.Bool("ignoreCert", true, "Ignore SSL certificate verification errors")
 	format := flag.String("f", "text", "Output format (json, csv, or text)")
 	output := flag.String("o", "", "Output file path")
@@ -179,21 +180,42 @@ func main() {
 	}
 
 	if *verbose {
-		fmt.Printf("Scanning %d IP(s) with %d domain(s)\n", len(ips), len(domains))
+		fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		fmt.Printf("GoVHost - Virtual Host Discovery\n")
+		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+		fmt.Printf("Target IPs: %d\n", len(ips))
+		fmt.Printf("Domains: %d\n", len(domains))
 		fmt.Printf("Total requests: %d (http+https per domain per IP)\n", len(ips)*len(domains)*2)
+		fmt.Printf("Threads: %d\n", *threads)
+		fmt.Printf("Timeout: %ds (Connection: 30s)\n", *requestTimeout)
+		fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
+	} else {
+		fmt.Printf("Scanning %d IP(s) with %d domain(s)...\n", len(ips), len(domains))
 	}
 
-	client := &http.Client{Timeout: time.Duration(*requestTimeout) * time.Second}
-	if *ignoreCert {
-		client.Transport = &http.Transport{
-			TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
-		}
+	// Create HTTP client with timeout and custom transport
+	client := &http.Client{
+		Timeout: time.Duration(*requestTimeout) * time.Second,
+		Transport: &http.Transport{
+			TLSClientConfig:     &tls.Config{InsecureSkipVerify: *ignoreCert},
+			DisableKeepAlives:   true,
+			MaxIdleConns:        100,
+			IdleConnTimeout:     30 * time.Second,
+			TLSHandshakeTimeout: 10 * time.Second,
+			// Set dial timeout to 30 seconds for connection establishment
+			DialContext: (&net.Dialer{
+				Timeout:   30 * time.Second,
+				KeepAlive: 30 * time.Second,
+			}).DialContext,
+		},
 	}
 
 	var wg sync.WaitGroup
 	semaphore := make(chan struct{}, *threads)
 	var results []RequestResult
 	var resultsMutex sync.Mutex
+	var requestCounter int
+	var counterMutex sync.Mutex
 
 	// Iterate over all IPs and domains
 	for _, targetIP := range ips {
@@ -203,6 +225,12 @@ func main() {
 				go func(ipAddr, domain, proto string) {
 					defer wg.Done()
 					semaphore <- struct{}{}
+
+					// Increment request counter
+					counterMutex.Lock()
+					requestCounter++
+					currentRequest := requestCounter
+					counterMutex.Unlock()
 
 					result := RequestResult{
 						Domain:   domain,
@@ -217,11 +245,17 @@ func main() {
 					} else {
 						req.Host = domain
 						if *verbose {
-							fmt.Printf("Checking %s://%s (IP: %s)\n", proto, domain, ipAddr)
+							totalRequests := len(ips) * len(domains) * 2
+							fmt.Printf("[%d/%d] Checking %s://%s (IP: %s)\n", currentRequest, totalRequests, proto, domain, ipAddr)
 						}
 
 						resp, err := client.Do(req)
 						if err != nil {
+							// Log timeout errors in verbose mode
+							if *verbose && (strings.Contains(err.Error(), "timeout") ||
+								strings.Contains(err.Error(), "Timeout")) {
+								fmt.Printf("  ⏱ Timeout: %s://%s (IP: %s)\n", proto, domain, ipAddr)
+							}
 							// Skip failed requests entirely
 							<-semaphore
 							return
@@ -233,6 +267,9 @@ func main() {
 							<-semaphore
 							return
 						}
+
+						// Print found result immediately in real-time
+						fmt.Printf("✓ FOUND: %s://%s (IP: %s) - Status: %d\n", proto, domain, ipAddr, result.StatusCode)
 
 						// Only append successful results
 						resultsMutex.Lock()
@@ -252,6 +289,11 @@ func main() {
 	}
 
 	wg.Wait()
+
+	// Print scan summary
+	fmt.Printf("\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n")
+	fmt.Printf("Scan Complete! Found %d matching virtual host(s)\n", len(results))
+	fmt.Printf("━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n")
 
 	// Output handling based on format
 	var outputString string

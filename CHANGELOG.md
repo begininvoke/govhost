@@ -1,5 +1,96 @@
 # Changelog
 
+## Version 2.2 - Real-Time Output & Parallel Execution
+
+### New Features
+
+#### Real-Time Virtual Host Discovery
+- **Instant feedback**: Virtual hosts are displayed immediately when discovered
+- Format: `✓ FOUND: protocol://domain (IP: address) - Status: code`
+- No need to wait for scan completion to see results
+- Results appear as they are found during parallel execution
+
+#### Enhanced Verbose Mode
+- **Progress tracking**: Shows `[current/total]` for each request
+- **Startup banner**: Displays scan configuration
+  - Target IPs count
+  - Domains count
+  - Total requests
+  - Thread count
+  - Timeout settings
+- **Request tracking**: See which requests are being processed in real-time
+
+#### Improved Scan Summary
+- Beautiful completion banner with separator lines
+- Total count of discovered virtual hosts
+- Clear visual separation between scan progress and results
+
+#### Parallel Execution Indicators
+- Requests execute in parallel (visible in verbose mode)
+- Out-of-order completion shows true concurrent processing
+- Example: `[2/8]`, `[3/8]`, `[1/8]` indicates parallel execution
+
+### User Experience Improvements
+- Clear visual hierarchy with Unicode box drawing characters
+- Immediate feedback on discoveries
+- Better progress visibility during large scans
+- Professional-looking output format
+
+### Examples
+
+```bash
+# Standard mode - see finds in real-time
+$ ./govhost -ip 192.168.1.100 -domains domains.txt
+Scanning 1 IP(s) with 5 domain(s)...
+✓ FOUND: http://admin.example.com (IP: 192.168.1.100) - Status: 200
+✓ FOUND: https://api.example.com (IP: 192.168.1.100) - Status: 200
+```
+
+```bash
+# Verbose mode - detailed progress
+$ ./govhost -ip 192.168.1.1-5 -domain example.com -v -threads 20
+[3/10] Checking https://example.com (IP: 192.168.1.2)
+[1/10] Checking http://example.com (IP: 192.168.1.1)
+[5/10] Checking https://example.com (IP: 192.168.1.3)
+✓ FOUND: http://example.com (IP: 192.168.1.1) - Status: 200
+```
+
+---
+
+## Version 2.1 - Enhanced Timeout Handling
+
+### New Features
+
+#### Comprehensive Timeout System
+- **Connection Timeout**: 30 seconds (fixed) - Prevents hanging on unreachable IPs
+- **TLS Handshake Timeout**: 10 seconds (fixed) - Ensures SSL/TLS doesn't hang
+- **Request Timeout**: Configurable via `-timeout` flag (default: 10 seconds)
+- **Idle Connection Timeout**: 30 seconds (fixed)
+- **Verbose Timeout Reporting**: Shows ⏱ indicator when servers timeout
+
+#### Improved Connection Handling
+- Better connection pooling with `MaxIdleConns` set to 100
+- `DisableKeepAlives` for cleaner connection management
+- Proper dial context with 30-second connection establishment timeout
+
+### Technical Improvements
+- Enhanced HTTP transport configuration
+- Better error reporting for timeout conditions
+- Optimized connection handling for large-scale scans
+
+### Examples
+
+```bash
+# Quick scan with short timeout
+./govhost -ip 192.168.1.0/24 -domain example.com -timeout 3 -threads 20
+
+# Verbose mode shows timeout events
+./govhost -ip 192.0.2.1 -domain test.com -v
+# Output: ⏱ Timeout: https://test.com (IP: 192.0.2.1)
+```
+
+---
+
 ## Version 2.0 - Multi-IP and Enhanced Features
 
 ### New Features
